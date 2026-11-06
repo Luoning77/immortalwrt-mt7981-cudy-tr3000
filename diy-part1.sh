@@ -17,10 +17,10 @@
 #echo 'src-git helloworld https://github.com/fw876/helloworld' >>feeds.conf.default
 #echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall' >>feeds.conf.default
 
-# Copy custom local packages into OpenWrt tree so they are available during build
-if [ -d "$GITHUB_WORKSPACE/package/luci-compat-keep" ]; then
+# Copy local package definitions, including pinned ARM64 proxy binaries.
+if [ -d "$GITHUB_WORKSPACE/package" ]; then
   mkdir -p package
-  cp -r "$GITHUB_WORKSPACE/package/luci-compat-keep" package/
+  cp -R "$GITHUB_WORKSPACE/package/." package/
 fi
 
 git clone https://github.com/eamonxg/luci-theme-aurora package/luci-theme-aurora

@@ -12,12 +12,9 @@ on:
         description: '编译设备型号'
         required: true
         type: choice
-        default: 'all'
+        default: '128M-Ubootmod'
         options:
-          - '256M'
-          - '128M'
           - '128M-Ubootmod'
-          - 'all' 
       repo:
         description: '指定源码仓库地址'
         required: true
@@ -29,7 +26,7 @@ on:
         type: string
         default: ''
       ssh:
-        description: '是否执行 make menuconfig, 编译设备为 all 时无效'
+        description: '是否通过 SSH 执行 make menuconfig'
         required: false
         type: boolean
         default: false
@@ -45,7 +42,7 @@ on:
         default: false
 
 env:
-  DEVICE_INPUT: ${{ github.event.inputs.device || github.event.client_payload.device }}
+  DEVICE_INPUT: ${{ github.event.inputs.device || github.event.client_payload.device || '128M-Ubootmod' }}
   CCACHE_DIR: /workdir/.ccache
   CCACHE_MAXSIZE: 2G
   REPO_URL: ${{ github.event.inputs.repo || github.event.client_payload.repo }}
@@ -61,11 +58,18 @@ env:
 jobs:
   menuconfig:
     name: ⚙️ Menuconfig & Push
-    if: github.event.inputs.ssh == 'true' && github.event.inputs.device != 'all'
+    if: github.event.inputs.ssh == 'true'
     runs-on: ubuntu-22.04
     steps:
       - name: 🙌 Checkout
         uses: actions/checkout@v4
+
+      - name: Validate device and load firmware version
+        run: |
+          test "$DEVICE_INPUT" = "128M-Ubootmod" || { echo "Only 128M-Ubootmod is supported"; exit 1; }
+          VERSION=$(sed -n 's/^FIRMWARE_VERSION:=//p' package/proxy-versions.mk)
+          [[ "$VERSION" =~ ^[0-9]{2}\.[0-9]+\.[0-9]+$ ]] || exit 1
+          echo "FIRMWARE_VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: 🛠️ Init Environment
         run: |
@@ -83,8 +87,6 @@ jobs:
       - name: 🔧 Set device variables
         run: |
           case "$DEVICE_INPUT" in
-            "256M") echo "CONFIG_FILE=config/256m.config" >> $GITHUB_ENV ;;
-            "128M") echo "CONFIG_FILE=config/128m.config" >> $GITHUB_ENV ;;
             "128M-Ubootmod") echo "CONFIG_FILE=config/128muboot.config" >> $GITHUB_ENV ;;
           esac
 
@@ -158,6 +160,13 @@ jobs:
           docker-images: true
           swap-storage: true
 
+      - name: Validate device and load firmware version
+        run: |
+          test "$DEVICE_INPUT" = "128M-Ubootmod" || { echo "Only 128M-Ubootmod is supported"; exit 1; }
+          VERSION=$(sed -n 's/^FIRMWARE_VERSION:=//p' package/proxy-versions.mk)
+          [[ "$VERSION" =~ ^[0-9]{2}\.[0-9]+\.[0-9]+$ ]] || exit 1
+          echo "FIRMWARE_VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: 🛠️ Init Environment
         run: |
           sudo -E apt-get -qq update
@@ -203,15 +212,11 @@ jobs:
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
           $GITHUB_WORKSPACE/$DIY_P2_SH
 
-      - name: 🔨 Multi-Device Compilation Loop
+      - name: 🔨 Compile 128M Ubootmod Firmware
         id: compile
         run: |
-          # 1. 确定编译列表
-          if [ "${DEVICE_INPUT}" = "all" ]; then
-            DEVICES="256M 128M 128M-Ubootmod"
-          else
-            DEVICES="${DEVICE_INPUT}"
-          fi
+          # Only build the user's 128M Ubootmod device.
+          DEVICES="128M-Ubootmod"
 
           mkdir -p $GITHUB_WORKSPACE/firmware_collection
 
@@ -222,8 +227,6 @@ jobs:
             
             # 2. 设置当前设备配置文件
             case "$DEV" in
-              "256M") CONFIG="config/256m.config" ;;
-              "128M") CONFIG="config/128m.config" ;;
               "128M-Ubootmod") CONFIG="config/128muboot.config" ;;
             esac
             
@@ -234,6 +237,13 @@ jobs:
             
             # 4. 刷新配置并下载
             make defconfig
+            # Catch dependencies removed by Kconfig before the expensive build.
+            for PACKAGE in ua3f mihomo-core kmod-nfnetlink-queue kmod-ipt-nfqueue iptables-mod-nfqueue kmod-nft-queue kmod-sched-bpf tc-full bpftool-minimal; do
+              grep -qx "CONFIG_PACKAGE_${PACKAGE}=y" .config || { echo "Missing required package: $PACKAGE"; exit 1; }
+            done
+            if grep -qx 'CONFIG_PACKAGE_tc-tiny=y' .config; then
+              echo "tc-tiny must be replaced by tc-full"; exit 1
+            fi
             make download -j$(nproc)
             
             # 5. 开始编译
@@ -257,7 +267,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: ImmortalWrt_Combined_${{ env.DEVICE_INPUT }}_${{ env.REPO_BRANCH }}
+          name: ImmortalWrt_${{ env.FIRMWARE_VERSION }}_${{ env.DEVICE_INPUT }}
           path: ${{ github.workspace }}/firmware_collection/*
 
       - name: 📌 Generate Release Tag
@@ -265,7 +275,7 @@ jobs:
         if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
         run: |
           BUILD_TIME=$(date +"%Y%m%d-%H%M")
-          RELEASE_TAG="ImmortalWrt-${BUILD_TIME}"
+          RELEASE_TAG="ImmortalWrt-${FIRMWARE_VERSION}-${BUILD_TIME}"
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
           cat > release.txt << EOF

@@ -14,12 +14,19 @@
 
 ## 大分区 ubootmod 固件
 
-本仓库默认编译的 ubootmod 固件为 112M 分区，若你想编译 122M 分区固件，请将 `diy-part2.sh` 中取消以下注释：
+本仓库仅编译 **128M-Ubootmod（128u）**，默认采用 **122M UBI 分区**。手动编译及源码更新触发的自动编译均使用该机型。
 
-```sh
-# set ubi to 122M
-# sed -i 's/reg = <0x5c0000 0x7000000>;/reg = <0x5c0000 0x7a40000>;/' target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts
-```
+`diy-part2.sh` 会同步修改该机型的 UBI 长度为 `0x7a40000`、镜像容量上限为 `125184k`、设备名称为 `Cudy TR3000 v1 ubi 122M`，上游布局发生变化时终止处理。其他机型的分区不修改。
+
+刷写前需确认 U-Boot 和设备分区支持该 122M 布局。修改仓库不会调整当前运行中的路由器分区，也不代表可直接保留旧配置升级。
+
+### UA3F / OpenClash 部署支持
+
+128u 配置预装 NFQUEUE（iptables/nftables）、TC/BPF 内核模块、`tc-full` 和 `bpftool-minimal`。保留现有 OpenClash 插件，并将官方 ARM64 UA3F（含 LuCI）与 Mihomo 内核预装到只读固件，减少后续占用可写闪存。Mihomo 路径为 `/etc/openclash/core/clash_meta`，仍由 OpenClash 管理，没有独立内核服务或开机解压任务。
+
+固件版本与二进制版本、官方发布资产 SHA256 统一维护在 `package/proxy-versions.mk`。下载优先尝试镜像，失败回退官方来源，构建系统校验固定 SHA256；不动态追随 latest，升级时应同时更新版本与官方哈希。
+
+预装程序不等于自动开启代理，也不修改无线、账号或网络策略。刷入后仍需现场配置与验收 SOCKS5、DNS、透明接管、防直连及 TC/eBPF 实际出口行为。
 
 ---
 
@@ -71,7 +78,7 @@ echo 1 > /sys/class/gpio/modem_power/value
 
 可以通过 ssh 连接到 Action 工作流来配置 `menuconfig` 。
 
-手动运行 `ImmortalWrt Builder`，选择单个设备（不能选 `all`），并勾选 SSH 选项。
+手动运行 `ImmortalWrt Builder`，选择 `128M-Ubootmod`，并勾选 SSH 选项。
 工作流使用 Upterm 公共中继提供 SSH 会话，仅允许使用触发者 GitHub 账号上的 SSH 公钥连接。
 在 `SSH connection to Menuconfig` 步骤的日志中找到 SSH 连接命令；连接后执行：
 

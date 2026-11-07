@@ -10,20 +10,20 @@
 # See /LICENSE for more information.
 #
 
-# Uncomment a feed source
-#sed -i 's/^#\(.*helloworld\)/\1/' feeds.conf.default
+set -euo pipefail
 
-# Add a feed source
-#echo 'src-git helloworld https://github.com/fw876/helloworld' >>feeds.conf.default
-#echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall' >>feeds.conf.default
+# Install the local package definitions before scanning feeds.
+cp -R "$GITHUB_WORKSPACE/package/." package/
 
-# Copy local package definitions, including the pinned official UA3F package.
-if [ -d "$GITHUB_WORKSPACE/package" ]; then
-  mkdir -p package
-  cp -R "$GITHUB_WORKSPACE/package/." package/
-fi
+fetch_package() {
+  local name="$1" repo="$2" commit="$3"
+  local dest="package/$name"
+  git init -q "$dest"
+  git -C "$dest" fetch --depth=1 "$repo" "$commit"
+  git -C "$dest" checkout --detach "$commit"
+}
 
-git clone https://github.com/eamonxg/luci-theme-aurora package/luci-theme-aurora
-git clone https://github.com/eamonxg/luci-app-aurora-config package/luci-app-aurora-config
-git clone https://github.com/timsaya/luci-app-bandix package/luci-app-bandix
-git clone https://github.com/timsaya/openwrt-bandix package/openwrt-bandix
+fetch_package luci-theme-aurora https://github.com/eamonxg/luci-theme-aurora.git 298dbcc74ddf820923a51285fb0826d429e5d7ca
+fetch_package luci-app-aurora-config https://github.com/eamonxg/luci-app-aurora-config.git a5299ce0144859f47683ec3bc40805bf616f534f
+fetch_package luci-app-bandix https://github.com/timsaya/luci-app-bandix.git 108369b8da05f01296a3ed0210a2ab60809712e5
+fetch_package openwrt-bandix https://github.com/timsaya/openwrt-bandix.git 0760d1f5b52d1a2317dfd171ab00fe6543a9a0c4

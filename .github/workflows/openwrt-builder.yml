@@ -7,8 +7,6 @@ on:
   push:
     branches:
       - build/no-clash-ua3f-128u
-  repository_dispatch:
-    types: [ "Source Code Update" ]
   workflow_dispatch:
     inputs:
       device:
@@ -24,7 +22,7 @@ on:
         type: string
         default: 'https://github.com/padavanonly/immortalwrt-mt798x-6.6'
       commit:
-        description: '指定源码commit进行编译，留空拉取最新源码'
+        description: '指定源码提交，留空使用已锁定的提交'
         required: false
         type: string
         default: ''
@@ -45,23 +43,25 @@ on:
         default: false
 
 env:
-  DEVICE_INPUT: ${{ github.event.inputs.device || github.event.client_payload.device || '128M-Ubootmod' }}
+  DEVICE_INPUT: ${{ github.event.inputs.device || '128M-Ubootmod' }}
   CCACHE_DIR: /workdir/.ccache
   CCACHE_MAXSIZE: 2G
-  REPO_URL: ${{ github.event.inputs.repo || github.event.client_payload.repo || 'https://github.com/padavanonly/immortalwrt-mt798x-6.6' }}
+  REPO_URL: ${{ github.event.inputs.repo || 'https://github.com/padavanonly/immortalwrt-mt798x-6.6' }}
   REPO_BRANCH: openwrt-24.10-6.6
-  REPO_COMMIT: ${{ github.event.inputs.commit }}
+  REPO_COMMIT: ${{ inputs.commit || 'ec9ef10efc65da1e6d1de4e2c043c0e13d08eed8' }}
   FEEDS_CONF: feeds.conf.default
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  UPLOAD_RELEASE: ${{ github.event.inputs.release || github.event.client_payload.release }}
+  UPLOAD_RELEASE: ${{ github.event.inputs.release }}
   PRERELEASE: ${{ github.event.inputs.prerelease }}
   TZ: Asia/Shanghai
 
 jobs:
   menuconfig:
     name: ⚙️ Menuconfig & Push
-    if: github.event.inputs.ssh == 'true'
+    if: github.ref == 'refs/heads/build/no-clash-ua3f-128u' && inputs.ssh
+    outputs:
+      commit: ${{ steps.save_config.outputs.commit }}
     runs-on: ubuntu-22.04
     steps:
       - name: 🙌 Checkout
@@ -84,7 +84,10 @@ jobs:
       - name: 🪜 Clone source code
         working-directory: /workdir
         run: |
-          git clone $REPO_URL -b $REPO_BRANCH --single-branch --filter=blob:none openwrt
+          [[ "$REPO_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          git clone --no-checkout --depth=1 --single-branch --branch "$REPO_BRANCH" -- "$REPO_URL" openwrt
+          git -C openwrt fetch --depth=1 origin "$REPO_COMMIT"
+          git -C openwrt checkout --detach "$REPO_COMMIT"
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
       - name: 🔧 Set device variables
@@ -101,10 +104,9 @@ jobs:
 
       - name: ⚙️ Load custom feeds
         run: |
-          [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-          chmod +x $DIY_P1_SH
+          cp "$FEEDS_CONF" openwrt/feeds.conf.default
           cd openwrt
-          $GITHUB_WORKSPACE/$DIY_P1_SH
+          bash "$GITHUB_WORKSPACE/$DIY_P1_SH"
 
       - name: 🧬 Update & Install feeds
         run: cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a
@@ -112,9 +114,8 @@ jobs:
       - name: 🧩 Load custom configuration
         run: |
           [ -e $CONFIG_FILE ] && cp -f $CONFIG_FILE openwrt/.config
-          chmod +x $DIY_P2_SH
           cd openwrt
-          $GITHUB_WORKSPACE/$DIY_P2_SH
+          bash "$GITHUB_WORKSPACE/$DIY_P2_SH"
 
       - name: ⌨️ SSH connection to Menuconfig
         uses: owenthereal/action-upterm@v1.15.0
@@ -123,7 +124,8 @@ jobs:
           limit-access-to-actor: true
           upterm-version: v0.29.0
           
-      - name: 📤 Push config to main branch
+      - name: 📤 Save config on the build branch
+        id: save_config
         run: |
           SRC="/workdir/openwrt/.config"
           DST="$GITHUB_WORKSPACE/${CONFIG_FILE}"
@@ -134,23 +136,24 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$CONFIG_FILE"
           
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          
-          git diff --cached --quiet || (
-            git commit -m "Update config: ${CONFIG_FILE}" || true
-            git pull --rebase origin $CURRENT_BRANCH
-            git push -f origin HEAD:$CURRENT_BRANCH
-          )
+          if ! git diff --cached --quiet; then
+            git commit -m "Update config: ${CONFIG_FILE}"
+            git push origin "HEAD:$GITHUB_REF"
+          fi
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   build:
     name: 🔨 Build Firmware
     needs: menuconfig
-    if: always() && (needs.menuconfig.result == 'success' || needs.menuconfig.result == 'skipped')
+    if: always() && github.ref == 'refs/heads/build/no-clash-ua3f-128u' && (needs.menuconfig.result == 'success' || needs.menuconfig.result == 'skipped')
     runs-on: ubuntu-22.04
     
     steps:
       - name: 🙌 Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.menuconfig.outputs.commit || github.sha }}
+          persist-credentials: false
 
       - name: 🪠 Free Disk Space
         uses: jlumbroso/free-disk-space@main
@@ -181,10 +184,10 @@ jobs:
       - name: 🪜 Clone source code
         working-directory: /workdir
         run: |
-          git clone $REPO_URL -b $REPO_BRANCH --single-branch --filter=blob:none openwrt
-          if [ -n "${REPO_COMMIT}" ]; then
-            cd openwrt && git checkout ${REPO_COMMIT}
-          fi
+          [[ "$REPO_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          git clone --no-checkout --depth=1 --single-branch --branch "$REPO_BRANCH" -- "$REPO_URL" openwrt
+          git -C openwrt fetch --depth=1 origin "$REPO_COMMIT"
+          git -C openwrt checkout --detach "$REPO_COMMIT"
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
       - name: ⚙️ Setup ccache & DL cache
@@ -193,7 +196,7 @@ jobs:
           path: |
             /workdir/.ccache
             /workdir/openwrt/dl
-          key: ${{ runner.os }}-openwrt-combined-${{ env.REPO_BRANCH }}-${{ hashFiles('config/*.config') }}
+          key: ${{ runner.os }}-openwrt-combined-${{ env.REPO_BRANCH }}-${{ hashFiles('config/128muboot.config', 'feeds.conf.default', 'diy-part1.sh', 'package/proxy-versions.mk') }}
           restore-keys: |
             ${{ runner.os }}-openwrt-combined-${{ env.REPO_BRANCH }}-
 
@@ -207,62 +210,76 @@ jobs:
       - name: 🧬 Update & Install feeds
         run: |
           cd openwrt
-          [ -e $GITHUB_WORKSPACE/$FEEDS_CONF ] && mv $GITHUB_WORKSPACE/$FEEDS_CONF feeds.conf.default
-          chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
-          $GITHUB_WORKSPACE/$DIY_P1_SH
+          cp "$GITHUB_WORKSPACE/$FEEDS_CONF" feeds.conf.default
+          bash "$GITHUB_WORKSPACE/$DIY_P1_SH"
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
-          $GITHUB_WORKSPACE/$DIY_P2_SH
+          bash "$GITHUB_WORKSPACE/$DIY_P2_SH"
 
       - name: 🔨 Compile 128M Ubootmod Firmware (UA3F only)
         id: compile
         run: |
-          # Only build the user's 128M Ubootmod device.
-          DEVICES="128M-Ubootmod"
-
-          mkdir -p $GITHUB_WORKSPACE/firmware_collection
-
+          set -euo pipefail
           cd /workdir/openwrt
+          cp "$GITHUB_WORKSPACE/config/128muboot.config" .config
+          make defconfig
 
-          for DEV in $DEVICES; do
-            echo "::group::🚀 Building $DEV"
-            
-            # 2. 设置当前设备配置文件
-            case "$DEV" in
-              "128M-Ubootmod") CONFIG="config/128muboot.config" ;;
-            esac
-            
-            echo "Using Config: $CONFIG"
-            
-            # 3. 加载配置
-            cp -f $GITHUB_WORKSPACE/$CONFIG .config
-            
-            # 4. 刷新配置并下载
-            make defconfig
-            # Catch dependencies removed by Kconfig before the expensive build.
-            for PACKAGE in ua3f kmod-nfnetlink-queue kmod-ipt-nfqueue iptables-mod-nfqueue kmod-nft-queue kmod-sched-bpf tc-full bpftool-minimal; do
-              grep -qx "CONFIG_PACKAGE_${PACKAGE}=y" .config || { echo "Missing required package: $PACKAGE"; exit 1; }
+          required_packages=(
+            ua3f luci-compat firewall4 nftables-json ip-full iptables-nft
+            kmod-nft-tproxy kmod-nft-socket kmod-nft-queue kmod-nfnetlink-queue
+            kmod-ipt-nfqueue iptables-mod-nfqueue kmod-nf-conntrack-netlink
+            kmod-sched-core kmod-sched-bpf tc-full bpftool-minimal
+          )
+          forbidden='luci-app-openclash(-[[:alnum:]_-]+)?|luci-i18n-openclash(-[[:alnum:]_-]+)?|(mihomo|clash)(-[[:alnum:]_-]+)?|tc-tiny|luci-compat-keep|ruby(-[[:alnum:]_-]+)?|libruby|chinadns-ng|dns2socks|microsocks|ipt2socks|kmod-mtd-rw'
+          grep -Fxq 'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y' .config
+          for package in "${required_packages[@]}"; do
+            grep -Fxq "CONFIG_PACKAGE_${package}=y" .config || { echo "Missing required package: $package"; exit 1; }
+          done
+          if grep -E "^CONFIG_PACKAGE_($forbidden)=[ym]$" .config; then
+            echo "Unexpected package selected"
+            exit 1
+          fi
+
+          make download -j"$(nproc)"
+          if ! make -j"$(nproc)" CC="ccache gcc" CXX="ccache g++"; then
+            make -j1 V=s
+          fi
+
+          shopt -s nullglob
+          images=(bin/targets/mediatek/filogic/*cudy_tr3000-v1-ubootmod*sysupgrade.bin)
+          manifests=(bin/targets/mediatek/filogic/*.manifest)
+          if (( ${#images[@]} != 1 || ${#manifests[@]} != 1 )); then
+            echo "Expected one TR3000 Ubootmod image and one package manifest"
+            exit 1
+          fi
+          image="${images[0]}"
+          manifest="${manifests[0]}"
+          if awk '{print $1}' "$manifest" | grep -E "^($forbidden)$"; then
+            echo "Unexpected package in the firmware image"
+            exit 1
+          fi
+          for package in "${required_packages[@]}"; do
+            awk -v expected="$package" '$1 == expected { found=1 } END { exit !found }' "$manifest" || {
+              echo "Missing package in the firmware image: $package"
+              exit 1
+            }
+          done
+
+          collection="$GITHUB_WORKSPACE/firmware_collection"
+          mkdir -p "$collection"
+          cp "$image" "$manifest" "$collection/"
+          cp .config "$collection/build.config"
+          {
+            echo "Firmware version: $FIRMWARE_VERSION"
+            echo "Build recipe: $(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
+            echo "Firmware source: $(git rev-parse HEAD)"
+            wc -c "$image"
+            for source in feeds/packages feeds/luci feeds/routing feeds/telephony; do
+              echo "$source: $(git -C "$source" rev-parse HEAD)"
             done
-            if grep -Eq '^CONFIG_PACKAGE_(luci-app-openclash|mihomo-core|mihomo|clash)=y
-            make download -j$(nproc)
-            
-            # 5. 开始编译
-            # 使用 ccache 加速，并保留 Toolchain
-            if ! make -j$(nproc) CC="ccache gcc" CXX="ccache g++"; then
-              echo "⚠️ Multi-threaded failed, retrying single-threaded..."
-              make -j1 V=s || exit 1
-            fi
-
-            echo "✅ $DEV build finished."
-            df -hT /workdir
-            echo "::endgroup::"
-          done
-
-          echo "📥 Collecting artifacts"
-          find bin/targets/ -name "*sysupgrade.bin" -exec cp {} $GITHUB_WORKSPACE/firmware_collection/ \;
-
-          echo "status=success" >> $GITHUB_OUTPUT
+          } | tee "$collection/build-info.txt"
+          (cd "$collection" && sha256sum -- *.bin > sha256sums)
+          echo "status=success" >> "$GITHUB_OUTPUT"
 
       - name: 🪄 Upload Binaries (Artifacts)
         uses: actions/upload-artifact@v4
@@ -270,6 +287,7 @@ jobs:
         with:
           name: ImmortalWrt_${{ env.FIRMWARE_VERSION }}_${{ env.DEVICE_INPUT }}
           path: ${{ github.workspace }}/firmware_collection/*
+          if-no-files-found: error
 
       - name: 📌 Generate Release Tag
         id: tag
@@ -305,85 +323,6 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
+          fail_on_unmatched_files: true
           prerelease: ${{ env.PRERELEASE == 'true' }}
           files: ${{ github.workspace }}/firmware_collection/*
-
-      - name: 🚧 Delete old workflow runs
-        uses: Mattraks/delete-workflow-runs@v2
-        with:
-          retain_days: 0
-          keep_minimum_runs: 9
- .config; then
-              echo "Clash/Mihomo packages must not be included"; exit 1
-            fi
-            if grep -qx 'CONFIG_PACKAGE_tc-tiny=y' .config; then
-              echo "tc-tiny must be replaced by tc-full"; exit 1
-            fi
-            make download -j$(nproc)
-            
-            # 5. 开始编译
-            # 使用 ccache 加速，并保留 Toolchain
-            if ! make -j$(nproc) CC="ccache gcc" CXX="ccache g++"; then
-              echo "⚠️ Multi-threaded failed, retrying single-threaded..."
-              make -j1 V=s || exit 1
-            fi
-
-            echo "✅ $DEV build finished."
-            df -hT /workdir
-            echo "::endgroup::"
-          done
-
-          echo "📥 Collecting artifacts"
-          find bin/targets/ -name "*sysupgrade.bin" -exec cp {} $GITHUB_WORKSPACE/firmware_collection/ \;
-
-          echo "status=success" >> $GITHUB_OUTPUT
-
-      - name: 🪄 Upload Binaries (Artifacts)
-        uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success'
-        with:
-          name: ImmortalWrt_${{ env.FIRMWARE_VERSION }}_${{ env.DEVICE_INPUT }}
-          path: ${{ github.workspace }}/firmware_collection/*
-
-      - name: 📌 Generate Release Tag
-        id: tag
-        if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
-        run: |
-          BUILD_TIME=$(date +"%Y%m%d-%H%M")
-          RELEASE_TAG="ImmortalWrt-${FIRMWARE_VERSION}-${BUILD_TIME}"
-          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
-
-          cat > release.txt << EOF
-          ## 📦 ImmortalWrt Firmware Release
-
-          **🏷️ Release:** $RELEASE_TAG
-          **🌿 Branch:** $REPO_BRANCH
-          **📱 Device:** ${DEVICE_INPUT}
-          **📅 Build Date:** $(date +"%Y-%m-%d %H:%M:%S")
-          **🔨 Compiler:** GCC with ccache
-
-          ## 📥 Download
-
-          Download the firmware files from the assets below.
-
-          ---
-
-          Built with ❤️ using [GitHub Actions](https://github.com/features/actions)
-          EOF
-
-          echo "status=success" >> $GITHUB_OUTPUT
-
-      - name: 📤 Upload to Release
-        uses: softprops/action-gh-release@v2
-        if: steps.tag.outputs.status == 'success'
-        with:
-          tag_name: ${{ steps.tag.outputs.release_tag }}
-          body_path: release.txt
-          prerelease: ${{ env.PRERELEASE == 'true' }}
-          files: ${{ github.workspace }}/firmware_collection/*
-
-      - name: 🚧 Delete old workflow runs
-        uses: Mattraks/delete-workflow-runs@v2
-        with:
-          retain_days: 0
-          keep_minimum_runs: 9

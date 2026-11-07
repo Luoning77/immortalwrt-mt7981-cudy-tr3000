@@ -19,9 +19,6 @@
 # Modify hostname
 #sed -i 's/OpenWrt/P3TERX-Router/g' package/base-files/files/bin/config_generate
 
-# 临时解决Rust问题
-sed -i 's/ci-llvm=true/ci-llvm=false/g' feeds/packages/lang/rust/Makefile
-
 # Keep the custom version separate from upstream's package-feed version.
 FIRMWARE_VERSION=$(sed -n 's/^FIRMWARE_VERSION:=//p' package/proxy-versions.mk)
 [[ "$FIRMWARE_VERSION" =~ ^[0-9]{2}\.[0-9]+\.[0-9]+$ ]] || exit 1

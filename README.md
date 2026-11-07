@@ -20,13 +20,13 @@
 
 刷写前需确认 U-Boot 和设备分区支持该 122M 布局。修改仓库不会调整当前运行中的路由器分区，也不代表可直接保留旧配置升级。
 
-### UA3F / OpenClash 部署支持
+### UA3F 独立部署支持
 
-128u 配置预装 NFQUEUE（iptables/nftables）、TC/BPF 内核模块、`tc-full` 和 `bpftool-minimal`。保留现有 OpenClash 插件，并将官方 ARM64 UA3F（含 LuCI）与 Mihomo 内核预装到只读固件，减少后续占用可写闪存。Mihomo 路径为 `/etc/openclash/core/clash_meta`，仍由 OpenClash 管理，没有独立内核服务或开机解压任务。
+128u 配置预装 UA3F 所需的 NFQUEUE（iptables/nftables）、TC/BPF 内核模块、`tc-full` 和 `bpftool-minimal`，并将官方 ARM64 UA3F（含 LuCI）预装到只读固件。不集成 OpenClash、Mihomo 或其他 Clash 内核。
 
-固件版本与二进制版本、官方发布资产 SHA256 统一维护在 `package/proxy-versions.mk`。下载优先尝试镜像，失败回退官方来源，构建系统校验固定 SHA256；不动态追随 latest，升级时应同时更新版本与官方哈希。
+UA3F 版本和官方发布资产 SHA256 统一维护在 `package/proxy-versions.mk`。下载优先尝试镜像，失败回退官方来源；构建系统校验固定 SHA256。
 
-预装程序不等于自动开启代理，也不修改无线、账号或网络策略。刷入后仍需现场配置与验收 SOCKS5、DNS、透明接管、防直连及 TC/eBPF 实际出口行为。
+预装程序不等于自动启用代理。刷入后按 UA3F 官方配置启用 TPROXY、GLOBAL 和兼容的 L3/eBPF 功能，再验收透明接管与实际 WAN 出口。
 
 ---
 
@@ -62,7 +62,7 @@ echo 1 > /sys/class/gpio/modem_power/value
 
 ## 第三方软件包
 
-- [OpenClash](https://github.com/vernesong/OpenClash)
+- UA3F
 - [Bandix](https://github.com/timsaya/luci-app-bandix)
 - [luci-theme-aurora](https://github.com/eamonxg/luci-theme-aurora)
 - [luci-app-aurora-config](https://github.com/eamonxg/luci-app-aurora-config)

@@ -4,6 +4,9 @@ permissions:
   contents: write
 
 on:
+  push:
+    branches:
+      - build/no-clash-ua3f-128u
   repository_dispatch:
     types: [ "Source Code Update" ]
   workflow_dispatch:
@@ -45,7 +48,7 @@ env:
   DEVICE_INPUT: ${{ github.event.inputs.device || github.event.client_payload.device || '128M-Ubootmod' }}
   CCACHE_DIR: /workdir/.ccache
   CCACHE_MAXSIZE: 2G
-  REPO_URL: ${{ github.event.inputs.repo || github.event.client_payload.repo }}
+  REPO_URL: ${{ github.event.inputs.repo || github.event.client_payload.repo || 'https://github.com/padavanonly/immortalwrt-mt798x-6.6' }}
   REPO_BRANCH: openwrt-24.10-6.6
   REPO_COMMIT: ${{ github.event.inputs.commit }}
   FEEDS_CONF: feeds.conf.default
@@ -212,7 +215,7 @@ jobs:
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
           $GITHUB_WORKSPACE/$DIY_P2_SH
 
-      - name: 🔨 Compile 128M Ubootmod Firmware
+      - name: 🔨 Compile 128M Ubootmod Firmware (UA3F only)
         id: compile
         run: |
           # Only build the user's 128M Ubootmod device.
@@ -238,9 +241,81 @@ jobs:
             # 4. 刷新配置并下载
             make defconfig
             # Catch dependencies removed by Kconfig before the expensive build.
-            for PACKAGE in ua3f mihomo-core kmod-nfnetlink-queue kmod-ipt-nfqueue iptables-mod-nfqueue kmod-nft-queue kmod-sched-bpf tc-full bpftool-minimal; do
+            for PACKAGE in ua3f kmod-nfnetlink-queue kmod-ipt-nfqueue iptables-mod-nfqueue kmod-nft-queue kmod-sched-bpf tc-full bpftool-minimal; do
               grep -qx "CONFIG_PACKAGE_${PACKAGE}=y" .config || { echo "Missing required package: $PACKAGE"; exit 1; }
             done
+            if grep -Eq '^CONFIG_PACKAGE_(luci-app-openclash|mihomo-core|mihomo|clash)=y
+            make download -j$(nproc)
+            
+            # 5. 开始编译
+            # 使用 ccache 加速，并保留 Toolchain
+            if ! make -j$(nproc) CC="ccache gcc" CXX="ccache g++"; then
+              echo "⚠️ Multi-threaded failed, retrying single-threaded..."
+              make -j1 V=s || exit 1
+            fi
+
+            echo "✅ $DEV build finished."
+            df -hT /workdir
+            echo "::endgroup::"
+          done
+
+          echo "📥 Collecting artifacts"
+          find bin/targets/ -name "*sysupgrade.bin" -exec cp {} $GITHUB_WORKSPACE/firmware_collection/ \;
+
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: 🪄 Upload Binaries (Artifacts)
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success'
+        with:
+          name: ImmortalWrt_${{ env.FIRMWARE_VERSION }}_${{ env.DEVICE_INPUT }}
+          path: ${{ github.workspace }}/firmware_collection/*
+
+      - name: 📌 Generate Release Tag
+        id: tag
+        if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
+        run: |
+          BUILD_TIME=$(date +"%Y%m%d-%H%M")
+          RELEASE_TAG="ImmortalWrt-${FIRMWARE_VERSION}-${BUILD_TIME}"
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
+          cat > release.txt << EOF
+          ## 📦 ImmortalWrt Firmware Release
+
+          **🏷️ Release:** $RELEASE_TAG
+          **🌿 Branch:** $REPO_BRANCH
+          **📱 Device:** ${DEVICE_INPUT}
+          **📅 Build Date:** $(date +"%Y-%m-%d %H:%M:%S")
+          **🔨 Compiler:** GCC with ccache
+
+          ## 📥 Download
+
+          Download the firmware files from the assets below.
+
+          ---
+
+          Built with ❤️ using [GitHub Actions](https://github.com/features/actions)
+          EOF
+
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: 📤 Upload to Release
+        uses: softprops/action-gh-release@v2
+        if: steps.tag.outputs.status == 'success'
+        with:
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          body_path: release.txt
+          prerelease: ${{ env.PRERELEASE == 'true' }}
+          files: ${{ github.workspace }}/firmware_collection/*
+
+      - name: 🚧 Delete old workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          retain_days: 0
+          keep_minimum_runs: 9
+ .config; then
+              echo "Clash/Mihomo packages must not be included"; exit 1
+            fi
             if grep -qx 'CONFIG_PACKAGE_tc-tiny=y' .config; then
               echo "tc-tiny must be replaced by tc-full"; exit 1
             fi

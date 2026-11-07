@@ -17,7 +17,7 @@
 #echo 'src-git helloworld https://github.com/fw876/helloworld' >>feeds.conf.default
 #echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall' >>feeds.conf.default
 
-# Copy local package definitions, including pinned ARM64 proxy binaries.
+# Copy local package definitions, including the pinned official UA3F package.
 if [ -d "$GITHUB_WORKSPACE/package" ]; then
   mkdir -p package
   cp -R "$GITHUB_WORKSPACE/package/." package/
